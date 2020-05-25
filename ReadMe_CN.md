@@ -9,7 +9,14 @@ groupcache是go语言开发的缓存库。用于替换memcache的。
 ```shell
 cd example
 go build
-./main 127.0.0.1:8001 127.0.0.1:8002 127.0.0.1:8003
+./example -addr=:8080 -pool=http://127.0.0.1:8080 
+
+# 查询
+curl localhost:8080/color?name=green
+#00FF00
+curl localhost:8080/color?name=red
+#FF0000
+
 ```
 
 ### 分析目的
@@ -19,7 +26,7 @@ go build
 https://segmentfault.com/a/1190000018464029
 
 ### 参考资料
-+ [《groupcache 使用入门》](http://betazk.github.io/2014/12/groupcache%E5%A6%82%E4%BD%95%E4%BD%BF%E7%94%A8%E7%9A%84%E4%B8%80%E4%B8%AA%E7%AE%80%E5%8D%95%E4%BE%8B%E5%AD%90/)
++ [《GROUPCACHE EXAMPLE》](https://sconedocs.github.io/groupcacheUseCase/)
 + [Playing with groupcache](https://capotej.com/blog/2013/07/28/playing-with-groupcache/)
 
 

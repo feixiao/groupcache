@@ -1,77 +1,58 @@
+// Simple groupcache example: https://github.com/golang/groupcache
+// Running 3 instances:
+// go run groupcache.go -addr=:8080 -pool=http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:8082
+// go run groupcache.go -addr=:8081 -pool=http://127.0.0.1:8081,http://127.0.0.1:8080,http://127.0.0.1:8082
+// go run groupcache.go -addr=:8082 -pool=http://127.0.0.1:8082,http://127.0.0.1:8080,http://127.0.0.1:8081
+// Testing:
+// curl localhost:8080/color?name=red
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
-	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 
 	"github.com/golang/groupcache"
 )
 
-var (
-	peers_addrs = []string{"127.0.0.1:8001", "127.0.0.1:8002", "127.0.0.1:8003"}
-	rpc_addrs   = []string{"127.0.0.1:9001", "127.0.0.1:9002", "127.0.0.1:9003"}
-	index       = flag.Int("index", 0, "peer index")
-)
+var Store = map[string][]byte{
+	"red":   []byte("#FF0000"),
+	"green": []byte("#00FF00"),
+	"blue":  []byte("#0000FF"),
+}
+
+var Group = groupcache.NewGroup("foobar", 64<<20, groupcache.GetterFunc(
+	func(ctx context.Context, key string, dest groupcache.Sink) error {
+		log.Println("looking up", key)
+		v, ok := Store[key]
+		if !ok {
+			return errors.New("color not found")
+		}
+		dest.SetBytes(v)
+		return nil
+	},
+))
 
 func main() {
+	addr := flag.String("addr", ":8080", "server address")
+	peers := flag.String("pool", "http://localhost:8080", "server pool list")
 	flag.Parse()
-	peers_addrs := make([]string, 3)
-	rpc_addrs := make([]string, 3)
-	if len(os.Args) > 0 {
-		for i := 1; i < 4; i++ {
-			peers_addrs[i-1] = os.Args[i]
-			rpcaddr := strings.Split(os.Args[i], ":")[1]
-			port, _ := strconv.Atoi(rpcaddr)
-			rpc_addrs[i-1] = ":" + strconv.Itoa(port+1000)
+	http.HandleFunc("/color", func(w http.ResponseWriter, r *http.Request) {
+		color := r.FormValue("name")
+		var b []byte
+		err := Group.Get(nil, color, groupcache.AllocatingByteSliceSink(&b))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
 		}
-	}
-	if *index < 0 || *index >= len(peers_addrs) {
-		fmt.Printf("peer_index %d not invalid\n", *index)
-		os.Exit(1)
-	}
-	peers := groupcache.NewHTTPPool(addrToURL(peers_addrs[*index]))
-	var stringcache = groupcache.NewGroup("SlowDBCache", 64<<20, groupcache.GetterFunc(
-		func(ctx context.Context, key string, dest groupcache.Sink) error {
-			result, err := ioutil.ReadFile(key)
-			if err != nil {
-				log.Fatal(err)
-				return err
-			}
-			fmt.Printf("asking for %s from dbserver\n", key)
-			dest.SetBytes([]byte(result))
-			return nil
-		}))
-
-	peers.Set(addrsToURLs(peers_addrs)...)
-
-	http.HandleFunc("/zk", func(rw http.ResponseWriter, r *http.Request) {
-		log.Println(r.URL.Query().Get("key"))
-		var data []byte
-		k := r.URL.Query().Get("key")
-		fmt.Printf("cli asked for %s from groupcache\n", k)
-		stringcache.Get(nil, k, groupcache.AllocatingByteSliceSink(&data))
-		rw.Write([]byte(data))
+		w.Write(b)
+		w.Write([]byte{'\n'})
 	})
-	go http.ListenAndServe(rpc_addrs[*index], nil)
-	rpcaddr := strings.Split(os.Args[1], ":")[1]
-	log.Fatal(http.ListenAndServe(":"+rpcaddr, peers))
-}
-
-func addrToURL(addr string) string {
-	return "http://" + addr
-}
-
-func addrsToURLs(addrs []string) []string {
-	result := make([]string, 0)
-	for _, addr := range addrs {
-		result = append(result, addrToURL(addr))
-	}
-	return result
+	p := strings.Split(*peers, ",")
+	pool := groupcache.NewHTTPPool(p[0])
+	pool.Set(p...)
+	http.ListenAndServe(*addr, nil)
 }
