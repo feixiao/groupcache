@@ -23,13 +23,15 @@ import "sync"
 // call is an in-flight or completed Do call
 // 包装一个key获取值锁需要的一些参数
 type call struct {
-	wg  sync.WaitGroup
+	wg sync.WaitGroup
+	// 实际请求函数
 	val interface{}
 	err error
 }
 
 // Group represents a class of work and forms a namespace in which
 // units of work can be executed with duplicate suppression.
+// 主要是用来组织已经存在的对某key的请求和对应的实际请求函数映射
 type Group struct {
 	mu sync.Mutex       // protects m
 	m  map[string]*call // lazily initialized
