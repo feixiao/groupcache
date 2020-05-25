@@ -145,9 +145,12 @@ func callInitPeerServer() {
 // 对于一个 Group 来说，会缓存自己节点的数据和访问比较频繁的 peer节点 的数据，用LRU算法控制缓存。
 // 当 cache 没有命中的时候，首先看看这个请求归不归该节点管，若是就是调用 getter：
 type Group struct {
-	name       string
-	getter     Getter // 传入的回调函数，给出了当本地miss同时缓存节点miss，或者本地miss，但该key属于本节点维护时该如何获取数据的函数
-	peersOnce  sync.Once
+	name      string
+	getter    Getter // 传入的回调函数，给出了当本地miss同时缓存节点miss，或者本地miss，但该key属于本节点维护时该如何获取数据的函数
+	peersOnce sync.Once
+	// http实现了该接口，使用
+	// func (p *HTTPPool) PickPeer(key string) (ProtoGetter, bool)
+	// 函数选取节点
 	peers      PeerPicker // peer 节点调度器
 	cacheBytes int64      // 最大cache字节数
 
@@ -211,12 +214,12 @@ func (g *Group) initPeers() {
 }
 
 func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
-	g.peersOnce.Do(g.initPeers) // 首次运行，初始化对等节点
+	g.peersOnce.Do(g.initPeers) // 首次运行，初始化对等节点,把httppool赋值给 groupcache.PeerPicker
 	g.Stats.Gets.Add(1)         // 设置stats
 	if dest == nil {            // 必须指定数据载体
 		return errors.New("groupcache: nil dest Sink")
 	}
-	// 必须指定数据载体
+	// 必须指定数据载体(从maincache、hotcache查找)
 	value, cacheHit := g.lookupCache(key)
 
 	// 本地缓存命中
@@ -240,12 +243,14 @@ func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
 	if destPopulated {
 		return nil
 	}
-	return setSinkView(dest, value)
+	return setSinkView(dest, value) // 把数据设置给sink
 }
 
 // load loads key either by invoking the getter locally or by sending it to another machine.
+// 从对等节点或自定义查找逻辑（getter）中获取数据
 func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView, destPopulated bool, err error) {
 	g.Stats.Loads.Add(1)
+	// loadGroup.Do是个竞争的方法，相同的key同时只会有一个访问
 	viewi, err := g.loadGroup.Do(key, func() (interface{}, error) {
 		// Check the cache again because singleflight can only dedup calls
 		// that overlap concurrently.  It's possible for 2 concurrent
@@ -278,6 +283,7 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		g.Stats.LoadsDeduped.Add(1)
 		var value ByteView
 		var err error
+		// 通过一致性hash获取对等节点，与httppool对应
 		if peer, ok := g.peers.PickPeer(key); ok {
 			// 根据分布式一致性hash查找对应节点， ok为true表明不是本机
 			// 向对应节点请求数据

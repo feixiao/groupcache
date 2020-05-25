@@ -2,6 +2,14 @@
 
 ### 功能介绍
 groupcache是go语言开发的缓存库。用于替换memcache的。
+#### 客户端行为
+```text
+当客户端连上groupcache时，能做的只有get获取数据，如果本地有所需要的数据，则直接返回，
+如果没有，则通过一致性哈希函数判断这个key所对应的peer，然后通过http从这个peer上获取数据；
+如果这个peer上有需要的数据，则通过http回复给之前的那个groupcache；groupcache收到之后，保存在本地hotCache中，并返回给客户端；
+如果peer上也没有所需要的数据，则groupcache从数据源(数据库或者文件)获取数据，并将数据保存在本地mainCache，并返回给客户端
+```
+
 #### 系统框架
 ![](./2.png)
 

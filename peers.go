@@ -44,6 +44,8 @@ type PeerPicker interface {
 // NoPeers is an implementation of PeerPicker that never finds a peer.
 type NoPeers struct{}
 
+// 所有的peer结构都要实现PeerPicker接口，即给定一个字符串，返回一个ProtoGetter,ok bool。
+// 在后面还会看到，如果是有peer的情况，用的是HTTPPool来代替NoPeers。
 func (NoPeers) PickPeer(key string) (peer ProtoGetter, ok bool) { return }
 
 var (
@@ -73,6 +75,7 @@ func RegisterPerGroupPeerPicker(fn func(groupName string) PeerPicker) {
 	portPicker = fn
 }
 
+// 会根据groupName返回这种peer结构，当然它们的共同点是一样的，也就是返回值类型为PeerPicker接口
 func getPeers(groupName string) PeerPicker {
 	if portPicker == nil {
 		return NoPeers{}
