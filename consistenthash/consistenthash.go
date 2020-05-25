@@ -23,13 +23,16 @@ import (
 	"strconv"
 )
 
+// Hash函数
 type Hash func(data []byte) uint32
 
 type Map struct {
 	hash     Hash
-	replicas int
-	keys     []int // Sorted
-	hashMap  map[int]string
+	replicas int   // 每个key的副本数量
+	keys     []int // Sorted，key为哈希环上面的一个点(节点哈希值)
+	// hashMap表的key是一个表示cache服务器或者副本的hash值，value为一个具体的cache服务器，
+	// 这样就完成了Cache A、Cache A1、Cache A2等副本全部映射到Cache A的功能。
+	hashMap map[int]string // 哈希环上面的一个点到服务器名的映射
 }
 
 func New(replicas int, fn Hash) *Map {
@@ -39,6 +42,7 @@ func New(replicas int, fn Hash) *Map {
 		hashMap:  make(map[int]string),
 	}
 	if m.hash == nil {
+		// 默认的hash函数
 		m.hash = crc32.ChecksumIEEE
 	}
 	return m
@@ -50,26 +54,38 @@ func (m *Map) IsEmpty() bool {
 }
 
 // Add adds some keys to the hash.
+// 将缓存服务器加到Map中，比如Cache A、Cache B作为keys，
+// 如果副本数指定的是2，那么Map中存的数据是Cache A#1、Cache A#2、Cache B#1、Cache B#2的hash结果
+// keys类似"host1"，"host2"等，表示cache服务器
 func (m *Map) Add(keys ...string) {
 	for _, key := range keys {
+		// 内循环实现副本数量要求
 		for i := 0; i < m.replicas; i++ {
+			// key和数字编号一起计算哈希
 			hash := int(m.hash([]byte(strconv.Itoa(i) + key)))
+			// 哈希值存入切片
 			m.keys = append(m.keys, hash)
+			// 哈希值和服务器名字的对应关系
 			m.hashMap[hash] = key
 		}
 	}
+
+	// 从小到大排序
 	sort.Ints(m.keys)
 }
 
 // Get gets the closest item in the hash to the provided key.
+// 如果有一个key要保存到某个cache服务器，Get函数返回对应的cache服务器。
 func (m *Map) Get(key string) string {
 	if m.IsEmpty() {
 		return ""
 	}
 
+	// 计算哈希值
 	hash := int(m.hash([]byte(key)))
 
 	// Binary search for appropriate replica.
+	// 查找m.keys[i] >= hash成立的最小值i，i前面的元素都不满足>hash
 	idx := sort.Search(len(m.keys), func(i int) bool { return m.keys[i] >= hash })
 
 	// Means we have cycled back to the first replica.
@@ -77,5 +93,6 @@ func (m *Map) Get(key string) string {
 		idx = 0
 	}
 
+	// 返回对应的服务器信息
 	return m.hashMap[m.keys[idx]]
 }
