@@ -40,17 +40,22 @@ type HTTPPool struct {
 	// Context optionally specifies a context for the server to use when it
 	// receives a request.
 	// If nil, the server uses the request's context
+	// 其中 Context可根据情况定制，主要用于服务端，将接收到的http请求转换成指定的context类型，便于进一步处理
 	Context func(*http.Request) context.Context
 
 	// Transport optionally specifies an http.RoundTripper for the client
 	// to use when it makes a request.
 	// If nil, the client uses http.DefaultTransport.
+	// Transport可根据情况定制，主要用于客户端，将一个向对等节点发起的请求context，转换成指定的Http访问方式，其中 RoundTripper为实现了
+	// RoundTrip(*Request) (*Response, error)的接口，故而，HTTPPool可以实现访问方式的灵活定制
 	Transport func(context.Context) http.RoundTripper
 
 	// this peer's base URL, e.g. "https://example.net:8000"
+	// 该节点本身的URL，为监听服务的地址
 	self string
 
 	// opts specifies the options.
+	// HTTP池的默认选项
 	opts HTTPPoolOptions
 
 	mu          sync.Mutex // guards peers and httpGetters
@@ -62,14 +67,17 @@ type HTTPPool struct {
 type HTTPPoolOptions struct {
 	// BasePath specifies the HTTP path that will serve groupcache requests.
 	// If blank, it defaults to "/_groupcache/".
+	// http服务地址前缀，默认为 "/_groupcache/".
 	BasePath string
 
 	// Replicas specifies the number of key replicas on the consistent hash.
 	// If blank, it defaults to 50.
+	// 分布式一致性hash中虚拟节点数量，默认 50.
 	Replicas int
 
 	// HashFn specifies the hash function of the consistent hash.
 	// If blank, it defaults to crc32.ChecksumIEEE.
+	// 分布式一致性hash的hash算法，默认 crc32.ChecksumIEEE.
 	HashFn consistenthash.Hash
 }
 
@@ -139,11 +147,14 @@ func (p *HTTPPool) PickPeer(key string) (ProtoGetter, bool) {
 	return nil, false
 }
 
+//  ServeHTTP 实现了http服务的具体方法
 func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse request.
+	// 判断URL前缀是否合法
 	if !strings.HasPrefix(r.URL.Path, p.opts.BasePath) {
 		panic("HTTPPool serving unexpected path: " + r.URL.Path)
 	}
+	// 分割URL，并从中提取group和key值，示例请求URL为：https://example.net:8000/_groupcache/groupname/key
 	parts := strings.SplitN(r.URL.Path[len(p.opts.BasePath):], "/", 2)
 	if len(parts) != 2 {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -152,6 +163,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	groupName := parts[0]
 	key := parts[1]
 
+	// 根据url中提取的groupname 获取group
 	// Fetch the value for this group/key.
 	group := GetGroup(groupName)
 	if group == nil {
@@ -160,6 +172,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var ctx context.Context
 	if p.Context != nil {
+		// 如Context不为空，说明需要使用定制的context
 		ctx = p.Context(r)
 	} else {
 		ctx = r.Context()
@@ -167,6 +180,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	group.Stats.ServerRequests.Add(1)
 	var value []byte
+	// 获取指定key对应的缓存
 	err := group.Get(ctx, key, AllocatingByteSliceSink(&value))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -174,12 +188,15 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write the value to the response body as a proto message.
+	// 序列化响应内容
 	body, err := proto.Marshal(&pb.GetResponse{Value: value})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// 设置http头
 	w.Header().Set("Content-Type", "application/x-protobuf")
+	// 设置http  body
 	w.Write(body)
 }
 
@@ -208,6 +225,7 @@ func (h *httpGetter) Get(ctx context.Context, in *pb.GetRequest, out *pb.GetResp
 	if h.transport != nil {
 		tr = h.transport(ctx)
 	}
+	// 执行请求
 	res, err := tr.RoundTrip(req)
 	if err != nil {
 		return err

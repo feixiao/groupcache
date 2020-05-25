@@ -26,6 +26,7 @@ import (
 //
 // Implementation of Getter must call exactly one of the Set methods
 // on success.
+// stringSink、byteViewSink、protoSink、allocBytesSink、truncBytesSink，顾名思义，不同的类型代表了其内部的存储方式的不同
 type Sink interface {
 	// SetString sets the value to s.
 	SetString(s string) error

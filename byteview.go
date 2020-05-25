@@ -31,6 +31,7 @@ import (
 // a pointer (like a time.Time).
 type ByteView struct {
 	// If b is non-nil, b is used, else s is used.
+	// 当b是nil 的时候，s作为存储内容的容器
 	b []byte
 	s string
 }
