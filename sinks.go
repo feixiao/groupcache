@@ -212,10 +212,12 @@ func (s *protoSink) SetProto(m proto.Message) error {
 // AllocatingByteSliceSink returns a Sink that allocates
 // a byte slice to hold the received value and assigns
 // it to *dst. The memory is not retained by groupcache.
+// 分配一个字节切片来保存接收到的数据
 func AllocatingByteSliceSink(dst *[]byte) Sink {
 	return &allocBytesSink{dst: dst}
 }
 
+// 有一个字节切片指针类型的属性dst
 type allocBytesSink struct {
 	dst *[]byte
 	v   ByteView
@@ -225,6 +227,7 @@ func (s *allocBytesSink) view() (ByteView, error) {
 	return s.v, nil
 }
 
+// 设置allocBytesSink的v，同时复制v中的b或者s丢给dst
 func (s *allocBytesSink) setView(v ByteView) error {
 	if v.b != nil {
 		*s.dst = cloneBytes(v.b)
@@ -235,6 +238,7 @@ func (s *allocBytesSink) setView(v ByteView) error {
 	return nil
 }
 
+// 这个得从下面的setBytesOwned开始往上看
 func (s *allocBytesSink) SetProto(m proto.Message) error {
 	b, err := proto.Marshal(m)
 	if err != nil {
@@ -243,10 +247,12 @@ func (s *allocBytesSink) SetProto(m proto.Message) error {
 	return s.setBytesOwned(b)
 }
 
+// 复制一份b，然后调用setBytesOwned
 func (s *allocBytesSink) SetBytes(b []byte) error {
 	return s.setBytesOwned(cloneBytes(b))
 }
 
+// 使用b设置allocBytesSink的dst和ByteView
 func (s *allocBytesSink) setBytesOwned(b []byte) error {
 	if s.dst == nil {
 		return errors.New("nil AllocatingByteSliceSink *[]byte dst")
@@ -257,6 +263,7 @@ func (s *allocBytesSink) setBytesOwned(b []byte) error {
 	return nil
 }
 
+// 字符串转成[]byte后进行和上面类似的操作
 func (s *allocBytesSink) SetString(v string) error {
 	if s.dst == nil {
 		return errors.New("nil AllocatingByteSliceSink *[]byte dst")
