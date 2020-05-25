@@ -21,6 +21,7 @@ package singleflight
 import "sync"
 
 // call is an in-flight or completed Do call
+// 包装一个key获取值锁需要的一些参数
 type call struct {
 	wg  sync.WaitGroup
 	val interface{}
@@ -43,19 +44,24 @@ func (g *Group) Do(key string, fn func() (interface{}, error)) (interface{}, err
 	if g.m == nil {
 		g.m = make(map[string]*call)
 	}
+
 	if c, ok := g.m[key]; ok {
+		// 已经有协程在处理了，阻塞(c.wg.Wait())等待完成
 		g.mu.Unlock()
 		c.wg.Wait()
 		return c.val, c.err
 	}
+	// 目前没有协程在处理，新建一个处理的任务
 	c := new(call)
 	c.wg.Add(1)
 	g.m[key] = c
 	g.mu.Unlock()
 
+	// 执行获取key的函数，并将结果赋值给这个Call
 	c.val, c.err = fn()
 	c.wg.Done()
 
+	// 重新上锁删除key
 	g.mu.Lock()
 	delete(g.m, key)
 	g.mu.Unlock()
