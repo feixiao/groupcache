@@ -35,6 +35,9 @@ type PeerPicker interface {
 	// PickPeer returns the peer that owns the specific key
 	// and true to indicate that a remote peer was nominated.
 	// It returns nil, false if the key owner is the current peer.
+	// PickPeer 根据 key 返回应该处理这个 key 的节点
+	// ok 为 true 代表找到了节点
+	// nil, false 代表当前节点就是 key 的处理器
 	PickPeer(key string) (peer ProtoGetter, ok bool)
 }
 

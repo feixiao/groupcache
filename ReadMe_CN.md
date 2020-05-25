@@ -10,6 +10,12 @@ groupcache是go语言开发的缓存库。用于替换memcache的。
 ![](./1.png)
 
 
+####  制约
++ 只能get、remove，不支持update，只能remove后再get
++ 过期机制为限制cache队列长度，不能设置过期时间，只能通过内置lru淘汰过期数据；
++  经常变更的数据不适合groupcache作为缓存；
+注意一点，groupcache的consistenhash实现只能增加节点，无法减少节点，若要实现该功能，要注意当减少节点时，
+如果有相同的虚拟节点映射到同一个位置，则要判断删除的数量。增加不存在问题，因为增加的时候后来的虚拟节点可以替换先设置的虚拟节点，不影响使用。
 
 ### 使用入门
 ```shell
@@ -28,16 +34,15 @@ curl localhost:8080/color?name=red
 ### 源码目录
  ```shell script
 .
-├── byteview.go
-├── byteview_test.go
-├── consistenthash    // 实现一致性hash功能
+├── byteview.go       // 封装了字节切片的多种操作方法
+├── consistenthash    // 提供了分布式一致性hash的抽象，其本身并没有实现分布式一致性的hash，而是可以以指定的hash完成分布式一致性的key的定位和节点的增加，注意这里没有实现节点删除。
 ├── groupcache.go     // grpc生成的代码，用于远程调用
-├── groupcachepb      // grpc生成的代码，用于远程调用
-├── http.go           // http相关的代码
+├── groupcachepb      // 提供了上述节点之间其消息序列化和反序列化协议，基于protobuf，在groupcache.proto中定义。
+├── http.go           // 实现了peers之间的http查询缓存的请求方法和响应服务
 ├── lru               // 实现缓存的置换算法（最近最少使用）
-├── peers.go          // 单个节点的一些接口实现
+├── peers.go          // 抽象了缓存节点，提供了注册、获取节点的机制
 ├── singleflight      // 实现多个同请求的合并，保证“同时”多个同参数的get请求只执行一次操作功能
-├── sinks.go
+├── sinks.go          // 抽象了数据容器, 可以以不同的方法初始化设置，最终以统一的字节切片读出
 └── testpb
 
 ```
@@ -52,7 +57,3 @@ https://segmentfault.com/a/1190000018464029
 + [《groupcache 设计原理剖析 》](https://www.dazhuanlan.com/2019/12/11/5df07fcb62cae/?__cf_chl_jschl_tk__=e5a47b230d1b9d89eb3887cab036b09f2e3ea621-1590370196-0-AYcPFk14NmbUvag0bCwvLEwPGpXssbJuZhDvEpan7iZiKQi123FXqUvH-LsRSQaov7ybpQtzh-615A-1ZEDC54TuWv_6ZTwsr3zoEwubtJbUbw2J8PTOnzfviGoQB4UWA9Y1ZVzP5QLQ2BCSNlSYxDlegJsosJAV1xJQf06FNkbXPBEAh0SCE29OAzUhpZx1qOKfiUjkI1NNltnexAUoGKVMymm9ocKiWwcq4y_CnUX3xNGz6wyOTmUjQ0RrS1qcQDN8Z-0Jrzn9z1VbzCbEc8R-bdwdkzo7hqaHZ3goA0AQMpxVWxzRjbsy4YIf7vHWEg)
 + [《GROUPCACHE EXAMPLE》](https://sconedocs.github.io/groupcacheUseCase/)
 + [Playing with groupcache](https://capotej.com/blog/2013/07/28/playing-with-groupcache/)
-
-
-https://www.jianshu.com/p/5c3db568b8b8
-https://juejin.im/entry/57c3ce697db2a200680ab024

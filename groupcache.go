@@ -38,6 +38,8 @@ import (
 )
 
 // A Getter loads data for a key.
+// 对于一个 cache 来说，他不知道如何拉取需要缓存的数据，你要是想缓存新的东西，
+// 就得有个 type 实现 Getter 接口，然后给我一个 Getter 对象，这样cache没有命中的时候我能靠这个对象拉取数据。
 type Getter interface {
 	// Get returns the value identified by key, populating dest.
 	//
@@ -139,18 +141,21 @@ func callInitPeerServer() {
 
 // A Group is a cache namespace and associated data loaded spread over
 // a group of 1 or more machines.
+// Group 代表一个 cache资源库
+// 对于一个 Group 来说，会缓存自己节点的数据和访问比较频繁的 peer节点 的数据，用LRU算法控制缓存。
+// 当 cache 没有命中的时候，首先看看这个请求归不归该节点管，若是就是调用 getter：
 type Group struct {
 	name       string
-	getter     Getter
+	getter     Getter // 传入的回调函数，给出了当本地miss同时缓存节点miss，或者本地miss，但该key属于本节点维护时该如何获取数据的函数
 	peersOnce  sync.Once
-	peers      PeerPicker
-	cacheBytes int64 // limit for sum of mainCache and hotCache size
+	peers      PeerPicker // peer 节点调度器
+	cacheBytes int64      // 最大cache字节数
 
 	// mainCache is a cache of the keys for which this process
 	// (amongst its peers) is authoritative. That is, this cache
 	// contains keys which consistent hash on to this process's
 	// peer number.
-	mainCache cache
+	mainCache cache // 本地的cache
 
 	// hotCache contains keys/values for which this peer is not
 	// authoritative (otherwise they would be in mainCache), but
@@ -160,17 +165,17 @@ type Group struct {
 	// network card could become the bottleneck on a popular key.
 	// This cache is used sparingly to maximize the total number
 	// of key/value pairs that can be stored globally.
-	hotCache cache
+	hotCache cache // 当本地miss，向其他缓存请求时本地也会缓存下来，防止反复向其他对等节点的请求。
 
 	// loadGroup ensures that each key is only fetched once
 	// (either locally or remotely), regardless of the number of
 	// concurrent callers.
-	loadGroup flightGroup
+	loadGroup flightGroup // 用以保证对同一个key的并发请求不会引起大量的peers间的请求，用waitGroup实现
 
-	_ int32 // force Stats to be 8-byte aligned on 32-bit platforms
+	_ int32 // 用来在32bit平台上强制8字节对齐的
 
 	// Stats are statistics on the group.
-	Stats Stats
+	Stats Stats // 缓存请求数，hit数，peer请求数等
 }
 
 // flightGroup is defined as an interface which flightgroup.Group
@@ -206,13 +211,15 @@ func (g *Group) initPeers() {
 }
 
 func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
-	g.peersOnce.Do(g.initPeers)
-	g.Stats.Gets.Add(1)
-	if dest == nil {
+	g.peersOnce.Do(g.initPeers) // 首次运行，初始化对等节点
+	g.Stats.Gets.Add(1)         // 设置stats
+	if dest == nil {            // 必须指定数据载体
 		return errors.New("groupcache: nil dest Sink")
 	}
+	// 必须指定数据载体
 	value, cacheHit := g.lookupCache(key)
 
+	// 本地缓存命中
 	if cacheHit {
 		g.Stats.CacheHits.Add(1)
 		return setSinkView(dest, value)
@@ -223,6 +230,9 @@ func (g *Group) Get(ctx context.Context, key string, dest Sink) error {
 	// (if local) will set this; the losers will not. The common
 	// case will likely be one caller.
 	destPopulated := false
+	// 由于load中会对并发的请求做处理，只有最先到的请求会直接向对等节点请求，
+	// 执行loadGroup.Do的传入参数二的闭包函数，而该函数调用了getLocally设置了dest，其他的只会等待，
+	// 所以需要这个标志，对没有直接请求的另外执行setSinkView完成值的传递。
 	value, destPopulated, err := g.load(ctx, key, dest)
 	if err != nil {
 		return err
@@ -258,6 +268,9 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		// 1: fn()
 		// 2: loadGroup.Do("key", fn)
 		// 2: fn()
+		//  注意这里又调用了lookupCache, 这个很巧妙！，防止了略有先后的两个请求可能导致两次重复对peer的访问，比如后来的请求在第一个请求还没有发起对等节点查询的时候发起
+		//  等第一个请求还没完成loadGroup.Do(key,func)中的func()中对缓存的设置 getFromPeer，第二个请求完成了本地缓存的检索，则第二个缓存会重复进入load，并且此时可能loadGroup.Do已经返回，
+		//	waitGroup已经结束，会再一次向对等节点发起请求
 		if value, cacheHit := g.lookupCache(key); cacheHit {
 			g.Stats.CacheHits.Add(1)
 			return value, nil
@@ -266,6 +279,8 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		var value ByteView
 		var err error
 		if peer, ok := g.peers.PickPeer(key); ok {
+			// 根据分布式一致性hash查找对应节点， ok为true表明不是本机
+			// 向对应节点请求数据
 			value, err = g.getFromPeer(ctx, peer, key)
 			if err == nil {
 				g.Stats.PeerLoads.Add(1)
@@ -277,6 +292,7 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 			// probably boring (normal task movement), so not
 			// worth logging I imagine.
 		}
+		// peer未找到该节点，或者该key属于本节点管辖，应该请求向数据源获取数据，调用group初始化的getter回调函数
 		value, err = g.getLocally(ctx, key, dest)
 		if err != nil {
 			g.Stats.LocalLoadErrs.Add(1)
@@ -284,6 +300,9 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		}
 		g.Stats.LocalLoads.Add(1)
 		destPopulated = true // only one caller of load gets this return value
+		// 再次从本地cache中加载
+		// populateCache该函数将新增的（无论从peer获取，或从数据源getter获取）key\value存入对应的缓存，peer→hotCache, 数据源获取→mainCache，
+		// 并在该函数内实现了对cache的维护，当两个cache超过总的大小限制，则根据lru删除多余的内容，并保证hotCache大小小于mainCache/8
 		g.populateCache(key, value, &g.mainCache)
 		return value, nil
 	})
